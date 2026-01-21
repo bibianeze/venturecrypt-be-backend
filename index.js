@@ -12,13 +12,21 @@ const app = express();
 
 // ==================== MIDDLEWARE ====================
 
-// CORS Configuration
+// CORS Configuration - FIXED (removed trailing slashes)
 app.use(cors({
-  origin: ['https://venturecrypt-be.vercel.app/', 'https://venturecrypt-be.vercel.app/'], // Support both Vite and CRA
+  origin: [
+    'https://venturecrypt-be.vercel.app',     // ✅ NO trailing slash
+    'https://www.venturecrypt-be.vercel.app', // ✅ www version
+    'http://localhost:3000',                   // Local CRA dev
+    'http://localhost:5173'                    // Local Vite dev
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Handle preflight OPTIONS requests
+app.options('*', cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -26,6 +34,7 @@ app.use(express.urlencoded({ extended: true }));
 // Request logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('Origin:', req.headers.origin);
   next();
 });
 
@@ -34,7 +43,7 @@ app.use((req, res, next) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'CryptoInvest API is running!',
+    message: 'VentureCrypt API is running!',
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',
@@ -49,6 +58,15 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test route for CORS
+app.get('/api/test', (req, res) => {
+  res.json({
+    message: 'CORS is working!',
+    origin: req.headers.origin,
     timestamp: new Date().toISOString()
   });
 });
@@ -136,11 +154,10 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log('\n🚀 ================================');
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
   console.log('🚀 ================================');
-  console.log(`📍 API URL: http://localhost:${PORT}`);
-  console.log(`📍 Admin Panel: http://localhost:${PORT}/api/admin`);
   console.log(`📍 Health Check: http://localhost:${PORT}/api/health`);
+  console.log(`📍 Test CORS: http://localhost:${PORT}/api/test`);
   console.log('================================');
   console.log(`📝 Environment:`, {
     PORT: process.env.PORT || '5000 (default)',
