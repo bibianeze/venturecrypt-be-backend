@@ -1,4 +1,4 @@
-// routes/investmentRoutes.js
+// routes/investment.js - ORIGINAL SIMPLE VERSION (NO BALANCE CHECKS)
 const express = require('express');
 const Investment = require('../models/Investment');
 const InvestmentPlan = require('../models/InvestmentPlan');
@@ -83,34 +83,23 @@ router.get('/plans/:id', async (req, res) => {
   }
 });
 
-// CREATE new investment (user request)
+// CREATE new investment - ORIGINAL SIMPLE VERSION
 router.post('/invest', authenticateUser, async (req, res) => {
   try {
     const { planId, amount, transactionProof } = req.body;
-
-    console.log('💰 Investment request received:', { userId: req.user.userId, planId, amount });
 
     if (!planId || !amount) {
       return res.status(400).json({ message: 'Plan and amount are required' });
     }
 
     const user = await User.findById(req.user.userId);
-    if (!user) {
-      console.error('❌ User not found:', req.user.userId);
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    console.log('👤 User found:', { email: user.email, balance: user.balance });
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
     const plan = await InvestmentPlan.findById(planId);
     if (!plan || !plan.isActive) {
-      console.error('❌ Plan not found or inactive:', planId);
       return res.status(404).json({ message: 'Investment plan not found or inactive' });
     }
 
-    console.log('📋 Plan found:', { name: plan.name, min: plan.minimumAmount, max: plan.maximumAmount });
-
-    // Validate amount
     if (amount < plan.minimumAmount) {
       return res.status(400).json({ 
         message: `Minimum investment for ${plan.name} is $${plan.minimumAmount.toLocaleString()}` 
@@ -119,15 +108,6 @@ router.post('/invest', authenticateUser, async (req, res) => {
     if (plan.maximumAmount && amount > plan.maximumAmount) {
       return res.status(400).json({ 
         message: `Maximum investment for ${plan.name} is $${plan.maximumAmount.toLocaleString()}` 
-      });
-    }
-
-    // ✅ CHECK SUFFICIENT BALANCE
-    const currentBalance = user.balance || 0;
-    if (currentBalance < amount) {
-      console.error('❌ Insufficient balance:', { required: amount, available: currentBalance });
-      return res.status(400).json({ 
-        message: `Insufficient balance. You have $${currentBalance.toLocaleString()}, but need $${amount.toLocaleString()}` 
       });
     }
 
@@ -141,7 +121,7 @@ router.post('/invest', authenticateUser, async (req, res) => {
     const startDate = new Date();
     const endDate = new Date(startDate.getTime() + plan.duration * 24 * 60 * 60 * 1000);
 
-    // Create investment
+    // Just create the investment - NO balance checks, NO automatic updates
     const investment = new Investment({
       user: user._id,
       plan: planId,
@@ -163,28 +143,11 @@ router.post('/invest', authenticateUser, async (req, res) => {
     });
 
     await investment.save();
-    console.log('✅ Investment created:', investment._id);
 
-    // ✅ UPDATE USER BALANCE AND TOTAL INVESTED
-    const previousBalance = user.balance;
-    const previousTotalInvested = user.totalInvested || 0;
-
-    user.balance -= amount;  // Deduct from available balance
-    user.totalInvested = previousTotalInvested + amount;  // Add to cumulative total invested
-
-    await user.save();
-
-    console.log('✅ User balance updated:', {
-      previousBalance,
-      newBalance: user.balance,
-      previousTotalInvested,
-      newTotalInvested: user.totalInvested
-    });
-
-    console.log(`✅ User ${user.email} invested $${amount} in ${plan.name}`);
+    console.log(`User ${user.email} requested investment of $${amount} in ${plan.name}`);
 
     res.status(201).json({
-      message: 'Investment request submitted successfully. Waiting for admin approval.',
+      message: 'Investment request submitted. Waiting for admin approval.',
       investment: {
         id: investment._id,
         amount,
@@ -197,17 +160,11 @@ router.post('/invest', authenticateUser, async (req, res) => {
         totalProfit,
         status: investment.status,
         endDate
-      },
-      updatedBalance: user.balance,
-      updatedTotalInvested: user.totalInvested
+      }
     });
   } catch (error) {
-    console.error('❌ Investment error:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      message: 'Server error', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined 
-    });
+    console.error('Investment error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -225,7 +182,7 @@ router.get('/my-investments', authenticateUser, async (req, res) => {
   }
 });
 
-// GET user's dashboard stats
+// GET user's dashboard stats - SIMPLE VERSION
 router.get('/dashboard-stats', authenticateUser, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
@@ -235,13 +192,12 @@ router.get('/dashboard-stats', authenticateUser, async (req, res) => {
     const completedInvestments = investments.filter(inv => inv.status === 'completed');
     const pendingInvestments = investments.filter(inv => inv.status === 'pending');
 
-    // ✅ Use user.totalInvested directly (it's now being tracked properly)
-    const totalInvested = user.totalInvested || 0;
+    // Simple calculation - just sum up amounts
+    const totalInvested = investments
+      .filter(inv => ['active', 'completed'].includes(inv.status))
+      .reduce((sum, inv) => sum + inv.amount, 0);
 
-    // ✅ Use user.totalEarnings directly (profit only)
-    const totalEarned = user.totalEarnings || 0;
-
-    // Calculate current portfolio value (including active investments' current value)
+    // Calculate current portfolio value
     const portfolioValue = activeInvestments.reduce((sum, inv) => sum + (inv.currentValue || inv.amount), 0);
 
     // Calculate user tier
@@ -250,7 +206,7 @@ router.get('/dashboard-stats', authenticateUser, async (req, res) => {
     res.json({
       balance: user.balance || 0,
       totalInvested,
-      totalEarned,
+      totalEarned: user.totalEarnings || 0, // Just use what admin sets
       portfolioValue,
       activeInvestments: activeInvestments.length,
       completedInvestments: completedInvestments.length,
@@ -278,8 +234,12 @@ router.post('/withdraw', authenticateUser, async (req, res) => {
     const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // ✅ Use user.totalInvested directly
-    const totalInvested = user.totalInvested || 0;
+    const investments = await Investment.find({ 
+      user: req.user.userId,
+      status: { $in: ['active', 'completed'] }
+    });
+
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
     const userTier = calculateUserTier(totalInvested);
 
     // Check if user is eligible to withdraw
@@ -310,14 +270,6 @@ router.post('/withdraw', authenticateUser, async (req, res) => {
 
     await withdrawal.save();
 
-    // ✅ DEDUCT FROM BALANCE IMMEDIATELY (or wait for admin approval - your choice)
-    // Option 1: Deduct now (prevents double-spending)
-    user.balance -= amount;
-    user.totalWithdrawn = (user.totalWithdrawn || 0) + amount;
-    await user.save();
-
-    // Option 2: Deduct only when admin approves (comment out above, handle in admin approval)
-
     res.status(201).json({
       message: 'Withdrawal request submitted successfully',
       withdrawal: {
@@ -325,8 +277,7 @@ router.post('/withdraw', authenticateUser, async (req, res) => {
         amount,
         status: withdrawal.status,
         createdAt: withdrawal.createdAt
-      },
-      updatedBalance: user.balance
+      }
     });
   } catch (error) {
     console.error('Withdrawal error:', error);
@@ -350,10 +301,12 @@ router.get('/my-withdrawals', authenticateUser, async (req, res) => {
 // CHECK withdrawal eligibility
 router.get('/withdrawal-eligibility', authenticateUser, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId);
-    
-    // ✅ Use user.totalInvested directly
-    const totalInvested = user.totalInvested || 0;
+    const investments = await Investment.find({ 
+      user: req.user.userId,
+      status: { $in: ['active', 'completed'] }
+    });
+
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
     const userTier = calculateUserTier(totalInvested);
 
     res.json({
